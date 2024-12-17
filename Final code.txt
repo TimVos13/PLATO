@@ -1,0 +1,341 @@
+pip install batman-package
+
+pip install transitleastsquares
+
+pip install wotan
+
+
+
+
+
+#Importing all necessary packages 
+import os
+import batman
+import random
+import numpy as np
+np.random.seed(seed=0)  # reproducibility 
+from transitleastsquares import resample
+from transitleastsquares import transitleastsquares
+from scipy import stats
+import statistics as stat
+from wotan import flatten
+import csv
+
+#Constants
+R_sun = 6.957 * 10 ** 8  #metres
+M_sun = 1.989 * 10 ** 30 #kg
+M_e = 5.972 * 10 ** 24   #kg
+R_e = 6371 * 10 ** 3     #metres
+G = 6.67 * 10**(-11)
+c1, c2, c3 = 1.008, 0.808, 17.74    #R_earth
+
+
+K7V = [0.63, 0.654, [0.49, 0.22]] # [M, R, [c1, c2]]
+K2V = [0.76, 0.76, [0.58, 0.13]]
+F8V = [1.22, 1.25, [0.37, 0.28]]
+
+
+
+
+
+
+
+def find_jumps(raw_data): # Find positions at every 45 days where jumps occur
+    t_indx = []
+    for n in range(1, 17):
+        i = int(n * 45 / 730 * len(raw_data))
+        left = np.mean(raw_data[i-400:i])
+        right = np.mean(raw_data[i:i+400])
+        left_sig = np.std(raw_data[i-400:i])
+        dif = abs(right - left)
+        if dif > left_sig:
+            t_indx.append(i)
+    return t_indx
+
+def fluxjump(time, raw_data):  # shift each segment between jumps to calibrate the light curve
+    t_indx = find_jumps(raw_data)
+    t_indx.append(len(time))
+    new = np.array(raw_data)
+    m = 0
+    for i in t_indx:
+        if i < len(time):
+            shift = np.mean(new[i:i+1000]) - np.mean(new[i-1000:i])
+            new[i:t_indx[m+1]] -= shift
+            m += 1
+    return new
+
+def median_sigma(data, bins):  # find characteristic standard deviation of baseline flux
+    sigmas = []
+    sample_size = int(len(data) / bins)
+    for n in range(0, bins):
+        i = n * sample_size
+        sd = np.std(data[i:i+sample_size])
+        sigmas.append(sd)
+    return np.median(sigmas)  
+
+
+
+
+
+
+
+def write_planets(number, spectral_class, P_bounds, R_bounds): # default: number = 100, P_bounds [d], R_bounds[R_e]
+    name = '{}_[{},{}]P_[{},{}]R.txt'.format(spectral_class[3], P_bounds[0], P_bounds[1], R_bounds[0], R_bounds[1])
+    with open(name, 'w') as file:
+        file.write(f'Mass [M_e], Radius [R_e], Period [d], T0 [d], Depth, Duration [d], LC_indx\n')
+        radii = np.linspace(R_bounds[0], R_bounds[1], number)          
+        for i in range(0, number):
+            n = 0
+            M_approx = (radii[i]/1.008)**(1/0.279) # Approx mass to pass through forecaster
+            if M_approx > 2.04: # mass break point
+                M_approx = (radii[i]/0.808)**(1/0.589)
+            while n < 1:
+                M_p = random.uniform(M_approx*0.97, M_approx*1.03)
+                R_p = radius(M_p)
+                if abs(R_p - radii[i]) < 0.0002:
+                    n += 1
+                else:
+                    continue
+            Period = random.uniform(P_bounds[0], P_bounds[1])  # Random orbital period within bin
+            t0 = random.uniform(0,1) * Period # Random T0
+            delta = 1 - (R_p / R_sun * R_e / spectral_class[1])**2 # Approximate transit depth
+            a = K3(Period, spectral_class[0], M_p) # Semi-major axis
+            dur = Period / np.pi * np.arcsin((spectral_class[1] - (R_p) * R_e / R_sun) / a) # transit duration [days]
+            i = random.randint(0, 9) # index for chosen noise template (at the moment only 2 choices for G2V)
+            file.write(f'{M_p}, {R_p}, {Period}, {t0}, {delta}, {dur}, {i}\n')
+        return str(name)
+
+
+
+
+
+
+#Section that simulates and creates the planets and adds them to the external file 
+
+def planet(M_star, starL):
+    M_p = 10 ** random.uniform(-2, 2.5)  #Planet mass Generation, Earth masses
+    R_p = radius(M_p)                  #Solar radii
+    p_min = 12.6 * (M_p/((4/3)*np.pi*(R_p**3)))**(-1/2) / 24  #days  
+    
+    #Setting the perid
+    period = random.uniform(100, 200)  #days 
+    t0 = random.uniform(0,1) * period    #First transit time of pl
+    return M_p, R_p, period, t0
+
+    
+def radius(mass):  # Using the Forecaster to fit the mass
+    if mass < 2.04:   
+        fac = np.random.normal(1, 0.0403, 1)[0]
+        rad = (c1 * mass**(0.279)) ** fac
+    else:
+        if mass > 131.7:
+            fac = np.random.normal(1, 0.0737, 1)[0]
+            rad = (c3 * mass**(-0.044)) ** fac
+        else:
+            fac = np.random.normal(1, 0.146, 1)[0]
+            rad = (c2 * mass**(0.589)) ** fac
+    return rad  # R_e
+
+
+def K3(period, M_s, M_p): #Using Keplers third law to calculate the semi-major axis
+    P = period * 24 * 3600
+    M_star = M_s * M_sun
+    M_plt = M_p * M_e
+    return ((P ** 2 * G * (M_star + M_plt)) / (4 * np.pi ** 2)) ** (1/3) / R_sun   # [R_sun]
+
+    
+def gen(M_star, starL, spectral_class, numplanet): # Generating planets and adding them to a file
+    
+    num = 1
+    times = numplanet
+
+    with open('planet.txt', 'w') as file:
+        # Write the specific content to the first line
+        file.write("Planet number, mass of planet, radii planet, period, first transit, a, dur, noise file\n")
+
+        for i in range(times):
+            M_p, R_p, period, t0 = planet(M_star, starL)  # generating a planet
+            a = K3(period, M_star, M_p)
+            
+            dur = period / np.pi * np.arcsin((spectral_class[1] - (R_p) * R_e / R_sun) / a) # transit duration [days]
+            i = random.randint(1, 10) # index for chosen noise template (at the moment only 2 choices for G2V)
+            
+            file.write(f'{num}, {M_p}, {R_p}, {period}, {t0}, {a}, {dur},{i}, \n')
+            num = num + 1
+            
+#list in file in order: num planet, mass of planet, radii, period, first transit, a, random file num. 
+
+
+
+
+
+
+dt = 0.03  # days (Temporal spacing of binned data - here chosen to condense to 0.01 days from 25sec)
+bins = int(2522880 * (25/86400) / dt)
+
+#Code that creates the noise, adds it, runs TLS and finds the period and outputs the plots 
+
+def curve(M_star, R_star, listc, filename, startype):
+    
+    success_rate = 0     #The success rate of TLS
+    transits = 0        #How many transits were calculated
+
+
+#Read the planet values from the file     
+    skip_first_line = True   
+    with open(filename, 'r') as file:
+        for line in file:
+            if skip_first_line:
+                skip_first_line = False
+                continue  # Skip the first line and move to the next one
+            values = line.split(',')
+            M_p = float(values[1])
+            R_p = float(values[2])
+            period = float(values[3])
+            t0 = float(values[4])
+            a = float(values[5])
+            dur = float(values[6])
+            filenumber = str(values[7])
+
+#Run batman
+            params = batman.TransitParams()
+            params.per = period
+            params.rp = R_p / R_star *  R_e / R_sun
+            params.a = a / R_star
+            params.t0 = t0
+            params.inc = 90.
+            params.ecc = 0.
+            params.w = 90.
+            params.limb_dark = "quadratic"
+            params.u = listc
+            
+            
+#Access the PLATO noise randomly
+            # Construct the file path
+            file_path = os.path.join(startype, filenumber+'.txt')
+
+            # Read data from the specified file
+            time_values, flux_values = np.loadtxt(file_path, delimiter=',', unpack=True)
+
+
+#Combining the data
+            
+            #find the mean to normalise the noise
+            mean = np.median(flux_values)
+
+            #creating the time values
+            t = np.linspace(0, 2 * 365, len(flux_values))
+
+            # start the batman model
+            m = batman.TransitModel(params, t)
+            flux = np.array(m.light_curve(params))
+
+            signal = flux_values * flux
+            
+#Flattening of the curve
+            cal = fluxjump(t, signal) # calibrate flux jumps
+            sig_bin = stats.binned_statistic(t, cal, statistic='mean', bins=bins)[0] # bin calibrated data
+            t_bin = stats.binned_statistic(t, t, statistic='mean', bins=bins)[0]
+            detrend, trend = flatten(t_bin, sig_bin, window_length=3*dur, return_trend=True) # Optimised Wotan biweight detrending
+            var = median_sigma(detrend, 365) # measure of background varience in relative flux 
+
+            
+
+#TLS to find the periods
+            model = transitleastsquares(t_bin, detrend)
+            results = model.power(period_min = 100, period_max = 200, transit_depth_min = 0.00001, oversampling_factor=2)
+        
+        
+# Checking the TLS results again the values
+            #Check if the real value is found
+            if np.isnan(results.period):
+                TestP = 'Wrong Period'
+                result_period = False
+                TestT = 'Wrong t0 value'
+                result_t0 = False
+                end = 'Transit not found'
+                transits += 1
+                #Write into the file the results
+                with open("OutputFile.txt", "a") as output_file:
+                    output_file.write(f"Planet {values[0]}, {values[3]}, {results.period:.5f} d, {results.period_uncertainty}, {TestP}, {values[4]} d, no values d, {TestT}, {end}\n")
+            else:
+                # Checking the Period
+                if (period - 5) < results.period and (period + 5) > results.period:
+                    TestP = 'Correct Period'
+                    result_period = True
+                elif period == 45:
+                    TestP = 'Need to check'
+                    result_period = 'unsure'
+                else:
+                    TestP = 'Wrong Period'
+                    result_period = False
+
+                # Checking the t0
+                if (t0 - 5) < results.transit_times[0] and (t0 + 5) > results.transit_times[0]:
+                    TestT = 'Correct t0 value'
+                    result_t0 = True
+                elif t0 == 45:
+                    TestT = 'Need to check'
+                    result_t0 = 'unsure'
+                else:
+                    TestT = 'Wrong t0 value'
+                    result_t0 = False 
+
+                # Check Overall result
+                if result_period and result_t0:
+                    end = 'Found Correct Transit'
+                    transits += 1
+                    success_rate += 1   
+
+                else:
+                    end = 'Transit not found'
+                    transits += 1
+
+    #Write into the file the results if there is no 'nan' value
+                with open("OutputFile.txt", "a") as output_file:
+                    output_file.write(f"Planet {values[0]}, {values[3]}, {results.period:.5f} d, {results.period_uncertainty}, {TestP}, {values[4]} d, {results.transit_times[0]:.5f} d, {TestT}, {end}\n")
+                
+
+            
+
+
+    return transits, success_rate
+
+
+
+
+
+
+
+with open('OutputFile.txt', 'w') as file:    #Empties the file from previous TLS results
+    pass 
+
+# [M, R, [c1, c2]]
+G8V = [0.87, 0.91, [0.48, 0.2]]
+G2V = [1, 1, [0.44, 0.23]]
+F5V = [1.34, 1.46, [0.34, 0.29]]
+
+
+#Here you can change the star types
+StarMass = 1.33
+StarRad = 1.473
+StarL = 3.63
+listc = [0.44, 0.23]
+startype = 'G2'
+
+planetgen = 400 #How many planets to simulate
+
+
+with open('OutputFile.txt', 'w') as file:
+    file.write(f"Planet number, Real Period, Calculated Period, Period uncertainty, Result, Real t0, t0 calculated, t0 result, TLS outcome, {startype} star\n")
+    
+#Running the cells
+gen(StarMass, StarL, G2V, planetgen)   #generating the planets
+Transits, SuccessRate = curve(StarMass, StarRad, listc,'planet.txt', startype) #Running the TLS, options for end is G2, G8 or F5
+
+
+#Writes the results of TLS into the file
+
+Prob = ((SuccessRate/Transits)*100)
+with open("OutputFile.txt", "a") as output_file:
+                output_file.write(f" \n Finished the calculations, the success rate of detecting the planets is: {Prob:5f}\n")

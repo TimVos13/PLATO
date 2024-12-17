@@ -1,0 +1,154 @@
+startype ='_F5'
+version = '_3'
+
+
+import matplotlib.pyplot as plt
+
+# Initialize lists to hold the periods, radii, and colors
+real_periods = []
+radii = []
+colors = []
+
+# Read the radius values from the 'planet.txt' file, skipping the header
+with open('planet' + startype + '.txt', 'r') as file:
+    next(file)  # Skip header line
+    for line in file:
+        values = line.strip().split(',')
+        if len(values) < 3:  # Skip lines that don't have enough values
+            continue
+        radius = float(values[2].strip())  # Correct index for radius after skipping header
+        radii.append(radius)
+
+# Now read the period and color information from the 'OutputFile.txt' file, skipping the header
+with open('OutputFile_' + startype + version + '.txt', 'r') as file:
+    next(file)  # Skip header line
+    for line in file:
+        values = line.strip().split(',')
+        if len(values) < 9:  # Skip lines that don't have enough values
+            continue
+        try:
+            real_period = float(values[1].strip())  # Correct index for real period after skipping header
+            real_periods.append(real_period)
+            # Determine the color based on the TLS outcome
+            colors.append('green' if values[8].strip() == "Found Correct Transit" else 'red')
+        except ValueError as e:
+            print(f"An error occurred: {e} for line: {line}")
+
+# Ensure that the lengths of the lists match
+assert len(real_periods) == len(radii) == len(colors), "The lists should have the same length."
+
+# Now we can create the scatter plot with the accumulated data
+fig, ax = plt.subplots(figsize=(15, 8))
+scatter = ax.scatter(radii, real_periods, c=colors, marker='o')
+
+# Add labels and title
+ax.set_ylabel('Real Period (days)')
+ax.set_xlabel('Radius (units not specified)')
+ax.set_title('Planet Radius vs. Real Period')
+
+# Create a custom legend
+from matplotlib.lines import Line2D
+legend_elements = [Line2D([0], [0], marker='o', color='w', label='Successful Detection',
+                          markerfacecolor='green', markersize=10),
+                   Line2D([0], [0], marker='o', color='w', label='Less Successful Detection',
+                          markerfacecolor='red', markersize=10)]
+ax.legend(handles=legend_elements, loc='best')
+
+# Show the plot
+plt.grid()
+plt.show()
+
+
+
+
+
+# Correcting the approach to read the file directly and calculate the success rates as requested
+
+# Path to the uploaded file
+file_path = 'OutputFile_' + startype + version + '.txt'
+
+# Function to calculate success rates from the file content
+def calculate_success_rates_from_file(file_path):
+    category_counts = {}
+    
+    with open(file_path, 'r') as file:
+        for line in file:
+            parts = line.split(',')
+            if len(parts) > 1:  # Check if the line has content
+                category = parts[0].split(' ')[1].split('.')[0]
+                result = parts[-1].strip()
+                
+                if category not in category_counts:
+                    category_counts[category] = {'success': 0, 'failure': 0}
+                
+                if result == 'Found Correct Transit':
+                    category_counts[category]['success'] += 1
+                else:
+                    category_counts[category]['failure'] += 1
+                    
+    success_rates = {}
+    for category, counts in category_counts.items():
+        total = counts['success'] + counts['failure']
+        success_rate = (counts['success'] / total) * 100 if total > 0 else 0
+        success_rates[category] = success_rate
+    
+    return success_rates
+
+# Calculate the success rates from the file
+success_rates = calculate_success_rates_from_file(file_path)
+print(success_rates)
+
+
+
+
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
+# Define the period and radius boundaries for the categories
+Pboxes = [(0, 75, 'A'), (75, 150, 'B'), (150, 225, 'C'), (225, 300, 'D')]
+Rboxes = [(0.6, 0.7, 1), (0.7, 0.8, 2), (0.8, 0.9, 3), (0.9, 1.0, 4), (1.0, 1.1, 5), (1.1, 1.2, 6)]
+
+# Define the success rates for each category as provided
+success_rates = success_rates
+# Create the plot
+fig, ax = plt.subplots(figsize=(12, 8))
+
+# Color map from red at 0% to light green at 100%
+cmap = mcolors.LinearSegmentedColormap.from_list("", ["red", "lightgreen"])
+
+# Plotting each box and annotating with the success rate
+for period_range in Pboxes:
+    for radius in Rboxes:
+        # Construct category label from period and radius ranges
+        category_label = period_range[2] + str(radius[2])
+        success_rate = success_rates.get(category_label, 0)
+        
+        # Define the rectangle representing the box
+        rect = plt.Rectangle((radius[0], period_range[0]), radius[1] - radius[0], period_range[1] - period_range[0], 
+                             linewidth=1, edgecolor='black', facecolor=cmap(success_rate / 100))
+        
+        # Add the rectangle to the plot
+        ax.add_patch(rect)
+        
+        # Annotate the rectangle with the success rate
+        # Adjusted to place text in the middle of the rectangle
+        ax.text((radius[0] + radius[1]) / 2, (period_range[0] + period_range[1]) / 2, 
+                f'{success_rate:.1f}%', ha='center', va='center', fontsize=8, weight='bold')
+
+# Set the limits of the x and y axis based on the first and last boxes
+plt.xlim(Rboxes[0][0], Rboxes[-1][1])
+plt.ylim(Pboxes[0][0], Pboxes[-1][1])
+
+# Setting the labels for the axes
+plt.xlabel('Radius')
+plt.ylabel('Periods (days)')
+
+# Set the labels for the ticks based on the period and radius ranges
+plt.xticks([r[0] + 0.05 for r in Rboxes], [f"{r[0]}-{r[1]}" for r in Rboxes])
+plt.yticks([p[0] + 37.5 for p in Pboxes], [f"{p[0]}-{p[1]}" for p in Pboxes])
+
+# Set the grid
+plt.grid(True)
+
+# Display the plot
+plt.show()
